@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>麻将牌桌</title>
+<!--
+  麻将牌桌前端（单文件，不依赖任何库）。
+  接口格式见同目录的 接口说明.md。
+  参数：
+    ?api=http://localhost:8000   后端地址（不写就用当前域名，后端直接把本文件当静态页放在 / 下最省事）
+  牌面目前是文字占位，以后换图只需要改 tileEl()。
+-->
+<style>
+  :root {
+    --bg: #2f5d46;
+    --panel: rgba(0, 0, 0, 0.18);
+    --text: #f2f2ee;
+    --muted: #b9c8bf;
+    --tile-bg: #e9e9e4;
+    --tile-text: #222;
+    --tile-red: #c0392b;
+    --tile-back: #7a8a99;
+    --accent: #f0c94b;
+    --danger: #e0685a;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 8px 16px; background: rgba(0, 0, 0, 0.3);
+  }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  header label { display: inline-flex; align-items: center; gap: 4px; }
+  button, select {
+    font: inherit; padding: 4px 10px; border-radius: 4px;
+    border: 1px solid #ccc; background: #f6f6f2; color: #222; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); }
+  #banner {
+    display: none; padding: 6px 16px; background: #5a2b26; color: #ffd9d3;
+    font-size: 13px; white-space: pre-wrap;
+  }
+  #banner.show { display: block; }
+
+  #layout { display: grid; grid-template-columns: 1fr 260px; gap: 12px; padding: 12px 16px; }
+  @media (max-width: 900px) { #layout { grid-template-columns: 1fr; } }
+
+  #table {
+    display: grid;
+    grid-template-areas: ". top ." "left center right" ". bottom .";
+    grid-template-columns: 1fr 1.4fr 1fr;
+    gap: 10px;
+  }
+  .seat { background: var(--panel); border-radius: 6px; padding: 8px; min-height: 90px; }
+  .seat[data-pos="top"] { grid-area: top; }
+  .seat[data-pos="left"] { grid-area: left; }
+  .seat[data-pos="right"] { grid-area: right; }
+  .seat[data-pos="bottom"] { grid-area: bottom; grid-column: 1 / -1; }
+  .seat.turn { outline: 2px solid var(--accent); }
+  .seat-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+  .seat-head .name { font-weight: 600; }
+  .seat-head .wind { color: var(--accent); }
+  .seat-head .score { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .seat-head .riichi { color: var(--danger); font-weight: 600; }
+  .row-label { color: var(--muted); font-size: 12px; margin: 4px 0 2px; }
+  .tiles { display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-end; min-height: 26px; }
+  .melds { display: flex; flex-wrap: wrap; gap: 8px; }
+  .meld { display: flex; gap: 1px; padding: 1px; border: 1px dashed rgba(255,255,255,0.3); border-radius: 3px; }
+
+  #center {
+    grid-area: center; background: var(--panel); border-radius: 6px; padding: 10px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  }
+  #center .round { font-size: 18px; font-weight: 600; }
+  #center .sub { color: var(--muted); }
+
+  .tile {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 40px; border-radius: 3px;
+    background: var(--tile-bg); color: var(--tile-text);
+    font-size: 12px; font-weight: 600; line-height: 1.1; text-align: center;
+    user-select: none; white-space: pre;
+  }
+  .tile.small { width: 24px; height: 32px; font-size: 10px; }
+  .tile.red { color: var(--tile-red); }
+  .tile.back { background: var(--tile-back); color: transparent; }
+  .tile.sideways { transform: rotate(90deg); margin: 0 6px; }
+  .tile.called { opacity: 0.4; }
+  .tile.tsumogiri { filter: brightness(0.88); }
+  .tile.clickable { cursor: pointer; outline: 2px solid transparent; }
+  .tile.clickable:hover { outline-color: var(--accent); transform: translateY(-4px); }
+  .tile.drawn { margin-left: 12px; }
+  .tile.has-wait { box-shadow: inset 0 -4px 0 #4fa3e0; }
+
+  #actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-height: 30px; }
+  #choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .choice { display: inline-flex; gap: 1px; padding: 3px; border-radius: 4px; background: rgba(255,255,255,0.15); cursor: pointer; }
+  .choice:hover { background: rgba(255,255,255,0.3); }
+  #hint { margin-top: 6px; color: var(--muted); min-height: 20px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  #hint .furiten { color: var(--danger); font-weight: 600; }
+  #status { color: var(--accent); margin-top: 4px; min-height: 20px; }
+
+  aside { background: var(--panel); border-radius: 6px; padding: 8px; max-height: 80vh; overflow: auto; }
+  aside h2 { font-size: 14px; margin: 0 0 6px; }
+  #log { margin: 0; padding-left: 18px; font-size: 13px; }
+  #log li { margin: 1px 0; }
+
+  #modal {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  #modal.show { display: flex; }
+  #modal .box {
+    background: #fbfbf8; color: #222; border-radius: 8px; padding: 16px 20px;
+    width: min(560px, 100%); max-height: 90vh; overflow: auto;
+  }
+  #modal h2 { margin: 0 0 8px; font-size: 18px; }
+  #modal table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+  #modal td, #modal th { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: left; }
+  #modal td.num, #modal th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #modal .plus { color: #1e8449; }
+  #modal .minus { color: #c0392b; }
+  #modal .tiles .tile { border: 1px solid #ccc; }
+  #modal .footer { margin-top: 12px; text-align: right; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 14px; border-radius: 6px;
+    display: none; max-width: 90vw;
+  }
+  #toast.show { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>麻将</h1>
+  <label>场数
+    <select id="opt-length">
+      <option value="tonpuu">东风战</option>
+      <option value="hanchan">半庄战</option>
+    </select>
+  </label>
+  <label>玩家
+    <select id="opt-players">
+      <option value="1">我 + 3 个电脑</option>
+      <option value="4">4 人轮流操作（测试用）</option>
+    </select>
+  </label>
+  <label>赤宝牌
+    <select id="opt-aka"><option value="1">有</option><option value="0">无</option></select>
+  </label>
+  <label>食断
+    <select id="opt-kuitan"><option value="1">允许</option><option value="0">禁止</option></select>
+  </label>
+  <label>切上满贯
+    <select id="opt-kiriage"><option value="0">关</option><option value="1">开</option></select>
+  </label>
+  <label>连风雀头
+    <select id="opt-renpu"><option value="4">4 符</option><option value="2">2 符</option></select>
+  </label>
+  <button id="btn-new" class="primary">新游戏</button>
+  <label id="viewer-wrap" hidden>视角
+    <select id="opt-viewer">
+      <option value="0">座位 0</option>
+      <option value="1">座位 1</option>
+      <option value="2">座位 2</option>
+      <option value="3">座位 3</option>
+    </select>
+  </label>
+  <label id="follow-wrap" hidden><input type="checkbox" id="opt-follow" checked> 自动切到该操作的人</label>
+</header>
+<div id="banner"></div>
+
+<div id="layout">
+  <main id="table">
+    <section class="seat" data-pos="top"></section>
+    <section class="seat" data-pos="left"></section>
+    <div id="center"><div class="sub">点“新游戏”开始</div></div>
+    <section class="seat" data-pos="right"></section>
+    <section class="seat" data-pos="bottom"></section>
+  </main>
+  <aside>
+    <h2>记录</h2>
+    <ol id="log"></ol>
+  </aside>
+</div>
+
+<div id="modal"><div class="box" id="modal-box"></div></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ---------- 基础 ----------
+
+const params = new URLSearchParams(location.search);
+const API = (params.get('api') || '').replace(/\/+$/, '');
+const POS = ['bottom', 'right', 'top', 'left'];        // 相对视角：自己、下家、对家、上家
+const REL_NAME = ['自己', '下家', '对家', '上家'];
+
+let state = null;        // 后端最近一次返回的状态
+let gameId = null;
+let viewer = 0;          // 当前视角（座位号）
+let humanSeats = [0];    // 由人操作的座位
+let riichiMode = false;  // 点了“立直”之后，下一次点牌是立直宣言牌
+let pending = null;      // 正在选择的吃/碰/杠选项 {type, options}
+let busy = false;
+
+const $ = (id) => document.getElementById(id);
+
+async function call(method, path, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) {
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(body);
+  }
+  let res;
+  try {
+    res = await fetch(API + path, opt);
+  } catch (e) {
+    throw new Error('连不上后端（' + (API || location.origin) + '）：' + e.message);
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error('后端返回的不是 JSON（HTTP ' + res.status + '）：' + text.slice(0, 200));
+  }
+  if (!res.ok) {
+    throw new Error((data && data.error) ? data.error : ('HTTP ' + res.status));
+  }
+  return data;
+}
+
+function toast(msg, ms = 3500) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+// ---------- 格式检查：后端字段不对时在页面顶上提示，方便对接 ----------
+
+const TILE_RE = /^([0-9][mps]|[1-7]z)$/;
+// 规则开关：[键, 类型]，见 接口说明.md“规则开关”。选择界面还没做，只检查和显示
+const RULE_KEYS = [['aka_dora', 'bool'], ['kuitan', 'bool'], ['kiriage_mangan', 'bool'], ['renpu_fu', 'fu']];
+
+function checkState(s) {
+  const problems = [];
+  // 默认不允许 null；可以为 null 的字段（drawn、hints、result、from、called_tile）不走这里或单独处理
+  const need = (obj, key, where, type) => {
+    if (!obj || !(key in obj)) { problems.push(where + ' 缺少字段 "' + key + '"'); return false; }
+    const v = obj[key];
+    if (v === null) { problems.push(where + '.' + key + ' 不能是 null'); return false; }
+    if (type === 'array' && !Array.isArray(v)) { problems.push(where + '.' + key + ' 应该是数组'); return false; }
+    if (type && type !== 'array' && typeof v !== type) {
+      problems.push(where + '.' + key + ' 应该是 ' + type + '，实际是 ' + (Array.isArray(v) ? 'array' : typeof v)); return false;
+    }
+    return true;
+  };
+  const tiles = (arr, where) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((t, i) => { if (!TILE_RE.test(t)) problems.push(where + '[' + i + '] 不是合法的牌："' + t + '"'); });
+  };
+  if (!s || typeof s !== 'object') return ['返回值不是对象'];
+  if (s.version !== 1) problems.push('version 应该是 1');
+  need(s, 'game_id', 'state', 'string');
+  if (need(s, 'phase', 'state', 'string') && !['playing', 'round_end', 'game_end'].includes(s.phase)) {
+    problems.push('phase 只能是 playing / round_end / game_end，实际是 "' + s.phase + '"');
+  }
+  if (need(s, 'round', 'state', 'object') && s.round) {
+    need(s.round, 'wind', 'round', 'string');
+    ['number', 'honba', 'riichi_sticks', 'dealer'].forEach((k) => need(s.round, k, 'round', 'number'));
+    if (s.round.wind && !['1z', '2z', '3z', '4z'].includes(s.round.wind)) problems.push('round.wind 应该是 1z~4z');
+  }
+  if (need(s, 'dora_indicators', 'state', 'array')) tiles(s.dora_indicators, 'dora_indicators');
+  need(s, 'wall_left', 'state', 'number');
+  need(s, 'viewer', 'state', 'number');
+  need(s, 'turn', 'state', 'number');
+  need(s, 'waiting_for', 'state', 'array');
+  if (need(s, 'rules', 'state', 'object')) {
+    RULE_KEYS.forEach(([k, kind]) => {
+      if (!need(s.rules, k, 'rules')) return;
+      const v = s.rules[k];
+      if (kind === 'bool' && typeof v !== 'boolean') problems.push('rules.' + k + ' 应该是 true / false');
+      if (kind === 'fu' && v !== 2 && v !== 4) problems.push('rules.' + k + ' 应该是 2 或 4');
+    });
+  }
+  if (need(s, 'players', 'state', 'array')) {
+    if (s.players.length !== 4) problems.push('players 应该有 4 个');
+    s.players.forEach((p, i) => {
+      const w = 'players[' + i + ']';
+      if (!p || typeof p !== 'object') { problems.push(w + ' 应该是对象'); return; }
+      ['seat', 'score', 'hand_count'].forEach((k) => need(p, k, w, 'number'));
+      if (typeof p.seat === 'number' && p.seat !== i) problems.push(w + '.seat 应该等于 ' + i + '（players 按座位号排列）');
+      need(p, 'seat_wind', w, 'string');
+      need(p, 'riichi', w, 'boolean');
+      if (need(p, 'discards', w, 'array')) {
+        p.discards.forEach((d, j) => {
+          if (!d || !TILE_RE.test(d.tile)) problems.push(w + '.discards[' + j + '] 应该是 {tile, ...}');
+        });
+      }
+      if (need(p, 'melds', w, 'array')) {
+        p.melds.forEach((m, j) => {
+          if (!m || !['chi', 'pon', 'minkan', 'ankan', 'kakan'].includes(m.type)) problems.push(w + '.melds[' + j + '].type 不对');
+          if (m) { if (Array.isArray(m.tiles)) tiles(m.tiles, w + '.melds[' + j + '].tiles'); else problems.push(w + '.melds[' + j + '].tiles 应该是数组'); }
+        });
+      }
+      if (i === s.viewer) {
+        if (need(p, 'hand', w, 'array')) tiles(p.hand, w + '.hand');
+      }
+    });
+  }
+  if ('drawn' in s && s.drawn !== null && !TILE_RE.test(s.drawn)) problems.push('drawn 不是合法的牌："' + s.drawn + '"');
+  if (need(s, 'legal_actions', 'state', 'array')) {
+    s.legal_actions.forEach((a, i) => { if (!a || typeof a.type !== 'string') problems.push('legal_actions[' + i + '] 缺少 type'); });
+  }
+  if (s.phase && s.phase !== 'playing' && !s.result) problems.push('phase 是 ' + s.phase + ' 时 result 不能为空');
+  if (s.result) {
+    const r = s.result;
+    if (r.type === 'agari') {
+      if (need(r, 'wins', 'result', 'array')) {
+        r.wins.forEach((w, i) => {
+          const where = 'result.wins[' + i + ']';
+          if (!w || typeof w !== 'object') { problems.push(where + ' 应该是对象'); return; }
+          ['seat', 'han', 'fu', 'yakuman', 'points'].forEach((k) => need(w, k, where, 'number'));
+          if (w.hand !== undefined) { if (Array.isArray(w.hand)) tiles(w.hand, where + '.hand'); else problems.push(where + '.hand 应该是数组'); }
+          if (w.melds !== undefined) {
+            if (!Array.isArray(w.melds)) problems.push(where + '.melds 应该是数组');
+            else w.melds.forEach((m, j) => {
+              if (!m || !Array.isArray(m.tiles)) problems.push(where + '.melds[' + j + '].tiles 应该是数组');
+              else tiles(m.tiles, where + '.melds[' + j + '].tiles');
+            });
+          }
+          if (need(w, 'yaku', where, 'array')) {
+            w.yaku.forEach((y, j) => {
+              if (!y || typeof y.name !== 'string' || typeof y.han !== 'number') problems.push(where + '.yaku[' + j + '] 应该是 {name, han}');
+            });
+          }
+        });
+      }
+    } else if (r.type !== 'ryuukyoku') {
+      problems.push('result.type 只能是 agari / ryuukyoku');
+    }
+    if (need(r, 'delta', 'result', 'array')) {
+      if (r.delta.length !== 4) problems.push('result.delta 应该有 4 个');
+      r.delta.forEach((d, i) => { if (typeof d !== 'number') problems.push('result.delta[' + i + '] 应该是数字'); });
+    }
+  }
+  return problems;
+}
+
+function showProblems(problems) {
+  const b = $('banner');
+  if (!problems.length) { b.classList.remove('show'); b.textContent = ''; return; }
+  b.textContent = '后端返回的格式和接口说明不一致（详见 接口说明.md）：\n· ' + problems.slice(0, 12).join('\n· ') +
+    (problems.length > 12 ? '\n……还有 ' + (problems.length - 12) + ' 处' : '');
+  b.classList.add('show');
+  console.warn('格式问题', problems, state);
+}
+
+// ---------- 牌 ----------
+
+const SUIT_NAME = { m: '万', p: '筒', s: '索' };
+const HONOR_NAME = ['', '东', '南', '西', '北', '白', '发', '中'];
+const WIND_NAME = { '1z': '东', '2z': '南', '3z': '西', '4z': '北' };
+
+function tileLabel(t) {
+  if (!TILE_RE.test(t)) return '?';
+  const n = t[0], s = t[1];
+  if (s === 'z') return HONOR_NAME[+n];
+  return (n === '0' ? '5' : n) + '\n' + SUIT_NAME[s];
+}
+
+function tileEl(t, opts = {}) {
+  const e = document.createElement('span');
+  e.className = 'tile' + (opts.small ? ' small' : '');
+  if (opts.back) {
+    e.classList.add('back');
+    return e;
+  }
+  if (t && t[0] === '0') e.classList.add('red');
+  e.textContent = tileLabel(t);
+  e.title = t;
+  e.dataset.tile = t;
+  return e;
+}
+
+function tilesEl(list, opts) {
+  const d = document.createElement('div');
+  d.className = 'tiles';
+  (list || []).forEach((t) => d.appendChild(tileEl(t, opts)));
+  return d;
+}
+
+function windName(t) { return WIND_NAME[t] || t; }
+
+// ---------- 渲染 ----------
+
+function relPos(seat) { return POS[(seat - viewer + 4) % 4]; }
+
+function legal(type) { return state ? (state.legal_actions || []).find((a) => a.type === type) : null; }
+
+function render() {
+  if (!state) return;
+  try {
+    renderCenter();
+    for (const p of state.players) renderSeat(p);
+    renderLog();
+    renderModal();
+  } catch (e) {
+    // 格式不对时可能画不出来：把原因写到顶上的提示里，不让页面卡死
+    const b = $('banner');
+    b.textContent = (b.classList.contains('show') ? b.textContent + '\n' : '') + '页面无法显示这个状态：' + e.message;
+    b.classList.add('show');
+    console.error(e);
+  }
+}
+
+function renderCenter() {
+  const r = state.round;
+  const c = $('center');
+  c.innerHTML = '';
+  const round = document.createElement('div');
+  round.className = 'round';
+  round.textContent = windName(r.wind) + r.number + '局';
+  const sub = document.createElement('div');
+  sub.className = 'sub';
+  sub.textContent = r.honba + ' 本场　供托 ' + r.riichi_sticks + '　余 ' + state.wall_left + ' 张';
+  const doraLabel = document.createElement('div');
+  doraLabel.className = 'sub';
+  doraLabel.textContent = '宝牌指示牌';
+  c.append(round, sub, doraLabel, tilesEl(state.dora_indicators, { small: true }));
+  if (state.rules) {
+    const r = state.rules;
+    const yn = (v) => (v ? '有' : '没有');
+    const rl = document.createElement('div');
+    rl.className = 'sub';
+    rl.textContent = '赤宝牌' + yn(r.aka_dora) + '・食断' + yn(r.kuitan) + '・切上满贯' + yn(r.kiriage_mangan) + '・连风雀头 ' + r.renpu_fu + ' 符';
+    c.append(rl);
+  }
+}
+
+function renderSeat(p) {
+  const sec = document.querySelector('.seat[data-pos="' + relPos(p.seat) + '"]');
+  sec.innerHTML = '';
+  sec.classList.toggle('turn', state.phase === 'playing' && state.turn === p.seat);
+
+  const head = document.createElement('div');
+  head.className = 'seat-head';
+  const name = document.createElement('span');
+  name.className = 'name';
+  const rel = REL_NAME[(p.seat - viewer + 4) % 4];
+  name.textContent = (p.name || ('座位 ' + p.seat)) + (rel === '自己' ? '' : '（' + rel + '）');
+  const wind = document.createElement('span');
+  wind.className = 'wind';
+  wind.textContent = windName(p.seat_wind) + (p.seat === state.round.dealer ? '・庄' : '');
+  head.append(name, wind);
+  if (p.riichi) {
+    const ri = document.createElement('span');
+    ri.className = 'riichi';
+    ri.textContent = '立直';
+    head.append(ri);
+  }
+  const score = document.createElement('span');
+  score.className = 'score';
+  score.textContent = p.score;
+  head.append(score);
+  sec.append(head);
+
+  // 河
+  const dl = document.createElement('div');
+  dl.className = 'row-label';
+  dl.textContent = '河';
+  const river = document.createElement('div');
+  river.className = 'tiles';
+  for (const d of p.discards) {
+    const e = tileEl(d.tile, { small: true });
+    if (d.riichi) e.classList.add('sideways');
+    if (d.called) e.classList.add('called');
+    if (d.tsumogiri) e.classList.add('tsumogiri');
+    river.append(e);
+  }
+  sec.append(dl, river);
+
+  // 副露
+  if (p.melds.length) {
+    const ml = document.createElement('div');
+    ml.className = 'row-label';
+    ml.textContent = '副露';
+    const melds = document.createElement('div');
+    melds.className = 'melds';
+    for (const m of p.melds) {
+      const box = document.createElement('div');
+      box.className = 'meld';
+      box.title = m.type;
+      m.tiles.forEach((t, i) => {
+        const back = m.type === 'ankan' && (i === 0 || i === 3);
+        const e = tileEl(t, { small: true, back });
+        if (m.called_tile && t === m.called_tile && m.type !== 'ankan' && !box.querySelector('.sideways')) e.classList.add('sideways');
+        box.append(e);
+      });
+      melds.append(box);
+    }
+    sec.append(ml, melds);
+  }
+
+  // 手牌
+  const hl = document.createElement('div');
+  hl.className = 'row-label';
+  hl.textContent = '手牌';
+  sec.append(hl);
+  if (p.seat === viewer && Array.isArray(p.hand)) {
+    sec.append(renderOwnHand(p));
+    sec.append(renderActions());
+    const hint = document.createElement('div');
+    hint.id = 'hint';
+    sec.append(hint);
+    renderHint(null);
+    const st = document.createElement('div');
+    st.id = 'status';
+    st.textContent = statusText();
+    sec.append(st);
+  } else {
+    const backs = [];
+    for (let i = 0; i < p.hand_count; i++) backs.push(null);
+    const d = document.createElement('div');
+    d.className = 'tiles';
+    backs.forEach(() => d.append(tileEl(null, { small: true, back: true })));
+    sec.append(d);
+  }
+}
+
+function renderOwnHand(p) {
+  const d = document.createElement('div');
+  d.className = 'tiles';
+  const disc = riichiMode ? legal('riichi') : legal('discard');
+  const allowed = new Set(disc ? disc.tiles : []);
+  const hintMap = (state.hints && state.hints.discards) || {};
+  const add = (t, extra) => {
+    const e = tileEl(t);
+    if (extra) e.classList.add(extra);
+    if (hintMap[t] && hintMap[t].length) e.classList.add('has-wait');
+    if (allowed.has(t) && !busy) {
+      e.classList.add('clickable');
+      e.addEventListener('click', () => onDiscard(t, extra === 'drawn'));
+    }
+    e.addEventListener('mouseenter', () => renderHint(t));
+    e.addEventListener('mouseleave', () => renderHint(null));
+    d.append(e);
+  };
+  p.hand.forEach((t) => add(t));
+  if (state.drawn) add(state.drawn, 'drawn');
+  return d;
+}
+
+function statusText() {
+  if (state.phase !== 'playing') return '';
+  if (busy) return '等待后端……';
+  if (!state.waiting_for.includes(viewer)) {
+    return state.waiting_for.length ? '等待座位 ' + state.waiting_for.join('、') + ' 操作' : '等待中';
+  }
+  if (riichiMode) return '选一张牌宣言立直（再点“立直”取消）';
+  if (legal('discard')) return '轮到你出牌';
+  return '可以鸣牌或和牌，不要就点“跳过”';
+}
+
+const ACTION_LABEL = {
+  tsumo: '自摸', ron: '荣和', riichi: '立直', chi: '吃', pon: '碰',
+  minkan: '明杠', ankan: '暗杠', kakan: '加杠', kyuushu: '九种九牌', pass: '跳过',
+};
+const ACTION_ORDER = ['tsumo', 'ron', 'riichi', 'ankan', 'kakan', 'minkan', 'pon', 'chi', 'kyuushu', 'pass'];
+
+function renderActions() {
+  const wrap = document.createElement('div');
+  const bar = document.createElement('div');
+  bar.id = 'actions';
+  const acts = (state.legal_actions || []).filter((a) => a.type !== 'discard');
+  acts.sort((a, b) => ACTION_ORDER.indexOf(a.type) - ACTION_ORDER.indexOf(b.type));
+  for (const a of acts) {
+    const b = document.createElement('button');
+    b.textContent = ACTION_LABEL[a.type] || a.type;
+    if (a.type === 'tsumo' || a.type === 'ron') b.className = 'primary';
+    if (a.type === 'riichi' && riichiMode) b.textContent = '取消立直';
+    b.disabled = busy;
+    b.addEventListener('click', () => onActionButton(a));
+    bar.append(b);
+  }
+  wrap.append(bar);
+
+  if (pending) {
+    const ch = document.createElement('div');
+    ch.id = 'choices';
+    for (const opt of pending.options) {
+      const c = document.createElement('span');
+      c.className = 'choice';
+      const list = Array.isArray(opt) ? opt : [opt];
+      list.forEach((t) => c.append(tileEl(t, { small: true })));
+      c.addEventListener('click', () => {
+        const body = { type: pending.type };
+        if (pending.type === 'chi' || pending.type === 'pon') body.tiles = list;
+        else body.tile = list[0];
+        pending = null;
+        send(body);
+      });
+      ch.append(c);
+    }
+    const cancel = document.createElement('button');
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => { pending = null; render(); });
+    ch.append(cancel);
+    wrap.append(ch);
+  }
+  return wrap;
+}
+
+function renderHint(hoverTile) {
+  const h = $('hint');
+  if (!h) return;
+  h.innerHTML = '';
+  const hints = state.hints;
+  if (!hints) return;
+  const label = (s) => { const e = document.createElement('span'); e.textContent = s; return e; };
+  const waitsEl = (waits) => {
+    const frag = document.createDocumentFragment();
+    let total = 0;
+    for (const w of waits) {
+      frag.append(tileEl(w.tile, { small: true }), label('×' + w.left + '　'));
+      total += w.left;
+    }
+    frag.append(label('共 ' + total + ' 张'));
+    return frag;
+  };
+  if (hoverTile && hints.discards && hints.discards[hoverTile]) {
+    h.append(label('打 '), tileEl(hoverTile, { small: true }), label(' 后听：'), waitsEl(hints.discards[hoverTile]));
+    return;
+  }
+  if (hints.waits && hints.waits.length) {
+    h.append(label('听：'), waitsEl(hints.waits));
+    if (hints.furiten) {
+      const f = document.createElement('span');
+      f.className = 'furiten';
+      f.textContent = '　振听';
+      h.append(f);
+    }
+  } else if (hints.discards && Object.keys(hints.discards).length) {
+    h.append(label('蓝色下划线的牌打出后可以听牌'));
+  }
+}
+
+// ---------- 记录 ----------
+
+function seatName(seat) {
+  if (seat === null || seat === undefined) return '';
+  const p = state.players[seat];
+  return (p && p.name) || ('座位 ' + seat);
+}
+
+function describeEvent(e) {
+  const who = seatName(e.seat);
+  switch (e.type) {
+    case 'draw': return who + ' 摸牌' + (e.tile ? ' ' + e.tile : '');
+    case 'discard': return who + ' 打 ' + e.tile + (e.tsumogiri ? '（摸切）' : '');
+    case 'riichi': return who + ' 立直';
+    case 'chi': case 'pon': case 'minkan':
+      return who + ' ' + ACTION_LABEL[e.type] + ' ' + (e.tiles || []).join(' ') + (e.from != null ? '（' + seatName(e.from) + '）' : '');
+    case 'ankan': case 'kakan': return who + ' ' + ACTION_LABEL[e.type] + ' ' + (e.tile || (e.tiles || []).join(' '));
+    case 'dora': return '新宝牌指示牌 ' + e.tile;
+    case 'tsumo': return who + ' 自摸';
+    case 'ron': return who + ' 荣和' + (e.from != null ? '（放铳：' + seatName(e.from) + '）' : '');
+    case 'ryuukyoku': return '流局' + (e.reason ? '（' + e.reason + '）' : '');
+    default: return JSON.stringify(e);
+  }
+}
+
+function renderLog() {
+  const ol = $('log');
+  ol.innerHTML = '';
+  const events = state.events || [];
+  for (const e of events.slice(-60)) {
+    const li = document.createElement('li');
+    li.textContent = describeEvent(e);
+    ol.append(li);
+  }
+  ol.parentElement.scrollTop = ol.parentElement.scrollHeight;
+}
+
+// ---------- 结算 ----------
+
+const RYUUKYOKU_NAME = {
+  exhaustive: '荒牌流局', kyuushu: '九种九牌', four_kans: '四杠散了',
+  four_riichi: '四家立直', four_winds: '四风连打', triple_ron: '三家和了',
+};
+
+function renderModal() {
+  const m = $('modal');
+  const box = $('modal-box');
+  if (state.phase === 'playing' || !state.result) {
+    m.classList.remove('show');
+    return;
+  }
+  const r = state.result;
+  box.innerHTML = '';
+  const h = document.createElement('h2');
+  if (r.type === 'agari') {
+    h.textContent = r.wins.map((w) => seatName(w.seat) + (w.from === null || w.from === undefined ? ' 自摸' : ' 荣和')).join('，');
+  } else {
+    h.textContent = RYUUKYOKU_NAME[r.reason] || ('流局：' + r.reason);
+  }
+  box.append(h);
+
+  if (r.type === 'agari') {
+    for (const w of r.wins) box.append(renderWin(w, r));
+  } else if (Array.isArray(r.tenpai)) {
+    const p = document.createElement('p');
+    p.textContent = '听牌：' + (r.tenpai.map((t, i) => t ? seatName(i) : null).filter(Boolean).join('、') || '无');
+    box.append(p);
+  }
+
+  // 点数变化
+  const tbl = document.createElement('table');
+  tbl.innerHTML = '<tr><th>玩家</th><th class="num">变化</th><th class="num">现在</th></tr>';
+  state.players.forEach((p, i) => {
+    const d = r.delta[i];
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td class="num"></td><td class="num"></td>';
+    tr.children[0].textContent = seatName(i);
+    tr.children[1].textContent = (d > 0 ? '+' : '') + d;
+    tr.children[1].className = 'num ' + (d > 0 ? 'plus' : d < 0 ? 'minus' : '');
+    tr.children[2].textContent = p.score;
+    tbl.append(tr);
+  });
+  box.append(tbl);
+
+  const footer = document.createElement('div');
+  footer.className = 'footer';
+  const btn = document.createElement('button');
+  btn.className = 'primary';
+  if (state.phase === 'game_end') {
+    btn.textContent = '再来一局';
+    btn.addEventListener('click', newGame);
+    const fin = document.createElement('p');
+    const order = state.players.slice().sort((a, b) => b.score - a.score);
+    fin.textContent = '终局：' + order.map((p, i) => (i + 1) + '位 ' + seatName(p.seat) + ' ' + p.score).join('　');
+    box.append(fin);
+  } else {
+    btn.textContent = '下一局';
+    btn.addEventListener('click', nextRound);
+  }
+  footer.append(btn);
+  box.append(footer);
+  m.classList.add('show');
+}
+
+function renderWin(w, r) {
+  const div = document.createElement('div');
+  const hand = document.createElement('div');
+  hand.className = 'tiles';
+  (w.hand || []).forEach((t) => hand.append(tileEl(t, { small: true })));
+  (w.melds || []).forEach((m) => {
+    const sp = document.createElement('span');
+    sp.style.width = '8px';
+    hand.append(sp);
+    m.tiles.forEach((t) => hand.append(tileEl(t, { small: true })));
+  });
+  if (w.win_tile) {
+    const sp = document.createElement('span');
+    sp.style.width = '8px';
+    hand.append(sp, tileEl(w.win_tile, { small: true }));
+  }
+  div.append(hand);
+
+  const ind = document.createElement('p');
+  ind.textContent = '宝牌指示牌：' + (r.dora_indicators || state.dora_indicators).join(' ') +
+    (r.uradora_indicators && r.uradora_indicators.length ? '　里宝牌指示牌：' + r.uradora_indicators.join(' ') : '');
+  div.append(ind);
+
+  const tbl = document.createElement('table');
+  for (const y of w.yaku) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td class="num"></td>';
+    tr.children[0].textContent = y.name;
+    tr.children[1].textContent = w.yakuman ? '' : y.han + ' 番';
+    tbl.append(tr);
+  }
+  div.append(tbl);
+
+  const sum = document.createElement('p');
+  sum.style.fontWeight = '600';
+  if (w.yakuman) {
+    sum.textContent = (w.yakuman > 1 ? w.yakuman + ' 倍' : '') + '役满　' + w.points + ' 点';
+  } else {
+    sum.textContent = w.fu + ' 符 ' + w.han + ' 番　' + w.points + ' 点';
+  }
+  div.append(sum);
+  return div;
+}
+
+// ---------- 操作 ----------
+
+async function apply(newState) {
+  state = newState;
+  showProblems(checkState(state));
+  if (state.game_id) gameId = state.game_id;
+  // 多人测试模式：自动切到该操作的人
+  if (humanSeats.length > 1 && $('opt-follow').checked && state.phase === 'playing' &&
+      state.waiting_for.length && !state.waiting_for.includes(viewer)) {
+    viewer = state.waiting_for[0];
+    $('opt-viewer').value = String(viewer);
+    state = await call('GET', '/api/state?game_id=' + encodeURIComponent(gameId) + '&seat=' + viewer);
+    showProblems(checkState(state));
+  }
+  render();
+}
+
+async function guarded(fn) {
+  if (busy) return;
+  busy = true;
+  if (state) render();
+  try {
+    await fn();
+  } catch (e) {
+    toast(e.message);
+    console.error(e);
+  } finally {
+    busy = false;
+    if (state) render();
+  }
+}
+
+function send(body) {
+  return guarded(async () => {
+    const res = await call('POST', '/api/action', Object.assign({ game_id: gameId, seat: viewer }, body));
+    riichiMode = false;
+    await apply(res);
+  });
+}
+
+function onDiscard(t, tsumogiri) {
+  send({ type: riichiMode ? 'riichi' : 'discard', tile: t, tsumogiri });
+}
+
+function onActionButton(a) {
+  pending = null;
+  switch (a.type) {
+    case 'riichi':
+      riichiMode = !riichiMode;
+      render();
+      return;
+    case 'chi': case 'pon':
+      if (a.options && a.options.length > 1) { pending = { type: a.type, options: a.options }; render(); return; }
+      send({ type: a.type, tiles: a.options ? a.options[0] : undefined });
+      return;
+    case 'ankan': case 'kakan':
+      if (a.tiles && a.tiles.length > 1) { pending = { type: a.type, options: a.tiles }; render(); return; }
+      send({ type: a.type, tile: a.tiles ? a.tiles[0] : undefined });
+      return;
+    default:
+      send({ type: a.type });
+  }
+}
+
+function newGame() {
+  return guarded(async () => {
+    const n = +$('opt-players').value;
+    const players = [0, 1, 2, 3].map((i) => (i < n ? 'human' : 'bot'));
+    humanSeats = players.map((p, i) => (p === 'human' ? i : -1)).filter((i) => i >= 0);
+    viewer = 0;
+    $('opt-viewer').value = '0';
+    $('viewer-wrap').hidden = humanSeats.length < 2;
+    $('follow-wrap').hidden = humanSeats.length < 2;
+    riichiMode = false;
+    pending = null;
+    const body = { players, length: $('opt-length').value };
+    // 规则开关（接口见 接口说明.md“规则开关”）：把页面上的选择传给后端
+    body.rules = {
+      aka_dora: $('opt-aka').value === '1',
+      kuitan: $('opt-kuitan').value === '1',
+      kiriage_mangan: $('opt-kiriage').value === '1',
+      renpu_fu: +$('opt-renpu').value,
+    };
+    const seedParam = params.get('seed');
+    if (seedParam !== null && seedParam.trim() !== '' && Number.isFinite(Number(seedParam))) body.seed = Number(seedParam);
+    await apply(await call('POST', '/api/new_game', body));
+    // 真人不在座位 0 时，后端返回的视角是那个座位；把页面视角同步过来，
+    // 否则页面仍按座位 0 渲染，看不到自己的手牌。
+    viewer = state.viewer;
+    $('opt-viewer').value = String(viewer);
+    render();
+  });
+}
+
+function nextRound() {
+  return guarded(async () => {
+    await apply(await call('POST', '/api/next', { game_id: gameId, seat: viewer }));
+  });
+}
+
+$('btn-new').addEventListener('click', newGame);
+$('opt-viewer').addEventListener('change', () => {
+  const nextViewer = +$('opt-viewer').value;
+  if (busy) { $('opt-viewer').value = String(viewer); return; }
+  guarded(async () => {
+    if (!gameId) { viewer = nextViewer; return; }
+    try {
+      const s = await call('GET', '/api/state?game_id=' + encodeURIComponent(gameId) + '&seat=' + nextViewer);
+      viewer = nextViewer;
+      riichiMode = false;
+      pending = null;
+      state = s;
+      showProblems(checkState(state));
+    } catch (e) {
+      $('opt-viewer').value = String(viewer);   // 请求失败就还原，视角和状态保持一致
+      throw e;
+    }
+  });
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { pending = null; riichiMode = false; if (state) render(); }
+});
+</script>
+</body>
+</html>
